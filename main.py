@@ -1,15 +1,21 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from cryptography.fernet import Fernet
+from Crypto.Cipher import AES
 import json
+import base64
 import os
 import random
 
 app = FastAPI()
 
-# Generate and store a key securely for production
-FERNET_KEY = os.environ.get("FERNET_KEY") or Fernet.generate_key().decode()
-fernet = Fernet(FERNET_KEY.encode())
+# 16-byte AES key (128-bit)
+AES_KEY = os.environ.get("AES_KEY") or b"mysecretkey12345"
+
+def pad(s):
+    return s + (16 - len(s) % 16) * chr(16 - len(s) % 16)
+
+def unpad(s):
+    return s[:-ord(s[-1])]
 
 class EncryptRequest(BaseModel):
     data: dict
@@ -21,40 +27,32 @@ class DecryptRequest(BaseModel):
 @app.post("/encrypt")
 def encrypt_data(req: EncryptRequest):
     try:
-        # Generate 4-digit OTP
         otp = str(random.randint(1000, 9999))
-
-        # Add OTP inside data before encryption
         data_with_otp = req.data.copy()
         data_with_otp["otp"] = otp
 
-        # Encrypt entire payload
-        raw_data = json.dumps(data_with_otp)
-        encrypted_data = fernet.encrypt(raw_data.encode()).decode()
+        raw = json.dumps(data_with_otp)
+        padded = pad(raw)
 
-        return {
-            "encrypted_data": encrypted_data,
-            "otp": otp  # only for testing; remove in production
-        }
+        cipher = AES.new(AES_KEY, AES.MODE_ECB)
+        encrypted = cipher.encrypt(padded.encode())
+        encoded = base64.urlsafe_b64encode(encrypted).decode()
+
+        return {"encrypted_data": encoded[:48], "otp": otp}  # Slice to ~48 chars
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/decrypt")
 def decrypt_data(req: DecryptRequest):
     try:
-        # Decrypt data
-        decrypted_bytes = fernet.decrypt(req.encrypted_data.encode())
-        decrypted_str = decrypted_bytes.decode()
-        decrypted_data = json.loads(decrypted_str)
+        cipher = AES.new(AES_KEY, AES.MODE_ECB)
+        decoded = base64.urlsafe_b64decode(req.encrypted_data.encode())
+        decrypted = cipher.decrypt(decoded).decode()
+        data = json.loads(unpad(decrypted))
 
-        # Verify OTP
-        original_otp = decrypted_data.get("otp")
-        if req.otp != original_otp:
-            return {"status": "failure", "message": "OTP verification failed"}
-
-        # Remove OTP before returning
-        decrypted_data.pop("otp", None)
-        return {"status": "success", "data": decrypted_data}
-
-    except Exception as e:
+        if data.get("otp") != req.otp:
+            return {"status": "failure", "message": "OTP mismatch"}
+        data.pop("otp", None)
+        return {"status": "success", "data": data}
+    except Exception:
         raise HTTPException(status_code=400, detail="Invalid encrypted data or OTP")
