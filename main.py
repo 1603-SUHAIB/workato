@@ -8,15 +8,18 @@ import random
 
 app = FastAPI()
 
-# 16-byte AES key (128-bit)
-AES_KEY = os.environ.get("AES_KEY") or b"mysecretkey12345"
+# AES key must be 16, 24, or 32 bytes long (AES-128, AES-192, AES-256)
+AES_KEY = os.environ.get("AES_KEY") or b"mysecretkey12345"  # 16 bytes
 
+# Padding functions
 def pad(s):
-    return s + (16 - len(s) % 16) * chr(16 - len(s) % 16)
+    pad_len = 16 - (len(s) % 16)
+    return s + chr(pad_len) * pad_len
 
 def unpad(s):
     return s[:-ord(s[-1])]
 
+# Request models
 class EncryptRequest(BaseModel):
     data: dict
 
@@ -38,7 +41,10 @@ def encrypt_data(req: EncryptRequest):
         encrypted = cipher.encrypt(padded.encode())
         encoded = base64.urlsafe_b64encode(encrypted).decode()
 
-        return {"encrypted_data": encoded[:48], "otp": otp}  # Slice to ~48 chars
+        return {
+            "encrypted_data": encoded,
+            "otp": otp  # For testing/demo; remove in production
+        }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -50,8 +56,9 @@ def decrypt_data(req: DecryptRequest):
         decrypted = cipher.decrypt(decoded).decode()
         data = json.loads(unpad(decrypted))
 
-        if data.get("otp") != req.otp:
+        if req.otp != data.get("otp"):
             return {"status": "failure", "message": "OTP mismatch"}
+
         data.pop("otp", None)
         return {"status": "success", "data": data}
     except Exception:
